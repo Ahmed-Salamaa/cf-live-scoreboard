@@ -106,11 +106,10 @@ export async function getSettings() {
   }
 }
 
-/** Safe subset of settings returned to the authenticated Admin UI (never exposes apiSecret or password hashes). */
+/** Safe subset of settings returned to the authenticated Admin UI (never exposes apiKey, apiSecret, or password hashes). */
 export function toSafeAdminSettings(s) {
   return {
     contestId: s.contestId,
-    apiKey: s.apiKey,
     hasKey: Boolean(s.apiKey),
     hasSecret: Boolean(s.apiSecret),
     asManager: s.asManager,
@@ -138,8 +137,8 @@ export async function updateSettings(patch) {
     next.apiKey = ''
     next.apiSecret = ''
   } else {
-    if (patch.apiKey !== undefined) {
-      next.apiKey = String(patch.apiKey).trim()
+    if (typeof patch.apiKey === 'string' && patch.apiKey.trim() !== '') {
+      next.apiKey = patch.apiKey.trim()
     }
     if (typeof patch.apiSecret === 'string' && patch.apiSecret.trim() !== '') {
       next.apiSecret = patch.apiSecret.trim()

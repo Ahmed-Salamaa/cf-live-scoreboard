@@ -2,7 +2,6 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 interface SafeSettings {
   contestId: string
-  apiKey: string
   hasKey: boolean
   hasSecret: boolean
   asManager: boolean
@@ -26,6 +25,7 @@ export function AdminSettings({ open, onClose, onSaved, onUnauthorized }: Props)
 
   const [contestId, setContestId] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [hasKey, setHasKey] = useState(false)
   const [apiSecret, setApiSecret] = useState('')
   const [hasSecret, setHasSecret] = useState(false)
   const [clearCredentials, setClearCredentials] = useState(false)
@@ -41,6 +41,7 @@ export function AdminSettings({ open, onClose, onSaved, onUnauthorized }: Props)
     setLoading(true)
     setError(null)
     setSavedMsg(null)
+    setApiKey('')
     setApiSecret('')
     setClearCredentials(false)
     setNewAdminPassword('')
@@ -57,7 +58,7 @@ export function AdminSettings({ open, onClose, onSaved, onUnauthorized }: Props)
       .then((s) => {
         if (cancelled || !s) return
         setContestId(s.contestId)
-        setApiKey(s.apiKey)
+        setHasKey(s.hasKey)
         setHasSecret(s.hasSecret)
         setAsManager(s.asManager)
         setFreezeMinOverride(s.freezeMinOverride != null ? String(s.freezeMinOverride) : '')
@@ -89,7 +90,7 @@ export function AdminSettings({ open, onClose, onSaved, onUnauthorized }: Props)
         credentials: 'same-origin',
         body: JSON.stringify({
           contestId,
-          apiKey,
+          apiKey: apiKey.trim() || undefined,
           apiSecret: apiSecret.trim() || undefined,
           clearCredentials,
           asManager,
@@ -106,8 +107,9 @@ export function AdminSettings({ open, onClose, onSaved, onUnauthorized }: Props)
       if (!res.ok || !json.ok) throw new Error(json.error || 'Failed to save settings')
       const s = json.settings as SafeSettings
       setContestId(s.contestId)
-      setApiKey(s.apiKey)
+      setHasKey(s.hasKey)
       setHasSecret(s.hasSecret)
+      setApiKey('')
       setApiSecret('')
       setClearCredentials(false)
       setAsManager(s.asManager)
@@ -161,11 +163,11 @@ export function AdminSettings({ open, onClose, onSaved, onUnauthorized }: Props)
             </label>
 
             <label>
-              Codeforces API Key
+              Codeforces API Key {hasKey ? <span className="muted">(configured)</span> : <span className="muted">(not set)</span>}
               <input
-                type="text"
-                autoComplete="off"
-                placeholder="Leave blank for public/demo mode"
+                type="password"
+                autoComplete="new-password"
+                placeholder={hasKey ? '•••••••• (leave blank to keep current)' : 'Enter API key'}
                 value={apiKey}
                 disabled={clearCredentials}
                 onChange={(e) => setApiKey(e.target.value)}

@@ -125,7 +125,7 @@ describe('sanitizeForPublic', () => {
 })
 
 describe('toSafeAdminSettings', () => {
-  it('never exposes apiSecret or password hashes', () => {
+  it('never exposes apiKey, apiSecret, or password hashes', () => {
     const safe = toSafeAdminSettings({
       contestId: '732371',
       apiKey: 'pub-key',
@@ -139,6 +139,7 @@ describe('toSafeAdminSettings', () => {
     })
     expect(safe.hasKey).toBe(true)
     expect(safe.hasSecret).toBe(true)
+    expect(safe).not.toHaveProperty('apiKey')
     expect(safe).not.toHaveProperty('apiSecret')
     expect(safe).not.toHaveProperty('adminPasswordHash')
     expect(safe).not.toHaveProperty('adminPassword')
