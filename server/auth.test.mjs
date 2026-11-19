@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { checkLoginRateLimit, clearLoginFailures, hashPassword, recordLoginFailure, signSession, verifyPassword, verifySession } from './auth.mjs'
 import { sanitizeForPublic } from './cf.mjs'
+import { toSafeAdminSettings } from './settings.mjs'
 
 describe('admin auth', () => {
   const origPass = process.env.ADMIN_PASSWORD
@@ -110,10 +111,36 @@ describe('sanitizeForPublic', () => {
     expect(pub.submissions[1].verdict).toBe('TESTING')
   })
 
-  it('keeps verdicts once contest is FINISHED', () => {
+  it('keeps verdicts once contest is FINISHED unless forcePublicFreeze is enabled', () => {
     const pub = sanitizeForPublic(sample('FINISHED'))
     expect(pub.managerView).toBe(false)
     expect(pub.submissions[1].verdict).toBe('OK')
     expect(pub.standings.rows[0].points).toBe(2)
+
+    const forced = sanitizeForPublic(sample('FINISHED'), { forcePublicFreeze: true, freezeMinOverride: 60 })
+    expect(forced.submissions[1].verdict).toBe('TESTING')
+    expect(forced.standings.rows[0].points).toBe(0)
+    expect(forced.standings.contest.freezeDurationSeconds).toBe(3600)
+  })
+})
+
+describe('toSafeAdminSettings', () => {
+  it('never exposes apiSecret or password hashes', () => {
+    const safe = toSafeAdminSettings({
+      contestId: '732371',
+      apiKey: 'pub-key',
+      apiSecret: 'top-secret',
+      asManager: true,
+      freezeMinOverride: 45,
+      forcePublicFreeze: true,
+      adminPasswordHash: 'scrypt$16384$8$1$aa$bb',
+      adminPassword: 'plain',
+      storage: 'file',
+    })
+    expect(safe.hasKey).toBe(true)
+    expect(safe.hasSecret).toBe(true)
+    expect(safe).not.toHaveProperty('apiSecret')
+    expect(safe).not.toHaveProperty('adminPasswordHash')
+    expect(safe).not.toHaveProperty('adminPassword')
   })
 })

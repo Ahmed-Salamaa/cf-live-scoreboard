@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { signedUrl, plainUrl } from './sign.mjs'
+import { getSettings } from './settings.mjs'
 
 const CACHE_TTL_MS = 5000
 const MIN_GAP_MS = 2100 // Codeforces allows 1 request / 2 s
@@ -49,16 +50,26 @@ async function fetchAll(contestId, key, secret, asManager) {
 
 /**
  * Strip hidden verdicts, per-problem results, ranks, and official totals from public
- * (non-admin) responses while the contest is not FINISHED so frozen results cannot leak.
+ * (non-admin) responses while the contest is frozen so hidden results cannot leak.
  */
-export function sanitizeForPublic(payload) {
+export function sanitizeForPublic(payload, settings = {}) {
   if (!payload || !payload.ok || !payload.standings) return payload
   const c = payload.standings.contest
   const isFinished = c?.phase === 'FINISHED'
-  const freezeSec = typeof c?.freezeDurationSeconds === 'number' ? c.freezeDurationSeconds : 3600
-  const shouldHide = !isFinished && freezeSec > 0 && typeof c?.durationSeconds === 'number'
+  const forceFreeze = Boolean(settings?.forcePublicFreeze)
+  const freezeSec =
+    typeof settings?.freezeMinOverride === 'number'
+      ? settings.freezeMinOverride * 60
+      : typeof c?.freezeDurationSeconds === 'number'
+        ? c.freezeDurationSeconds
+        : 3600
+  const contestOut =
+    typeof settings?.freezeMinOverride === 'number'
+      ? { ...c, freezeDurationSeconds: freezeSec }
+      : c
+  const shouldHide = (!isFinished || forceFreeze) && freezeSec > 0 && typeof c?.durationSeconds === 'number'
   if (!shouldHide) {
-    return { ...payload, managerView: false }
+    return { ...payload, managerView: false, standings: { ...payload.standings, contest: contestOut } }
   }
   const freezeAt = c.durationSeconds - freezeSec
   const submissions = (payload.submissions ?? []).map((s) =>
@@ -73,28 +84,32 @@ export function sanitizeForPublic(payload) {
   return {
     ...payload,
     managerView: false,
-    standings: { ...payload.standings, rows },
+    standings: { ...payload.standings, contest: contestOut, rows },
     submissions,
   }
 }
 
-let cached = null // { at, contestId, payload }
+let cached = null // { at, cacheKey, payload }
 let inflight = null
 
-async function getRawContest(cacheFile) {
-  const contestId = process.env.CF_CONTEST_ID || '732371'
-  const key = process.env.CF_API_KEY || ''
-  const secret = process.env.CF_API_SECRET || ''
-  const hasKey = Boolean(key && secret)
-  const asManager = (process.env.CF_AS_MANAGER ?? 'true') !== 'false'
+export function invalidateContestCache() {
+  cached = null
+  warnedManager = false
+}
 
-  if (cached && cached.contestId === contestId && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload
+async function getRawContest(settings, cacheDir) {
+  const { contestId, apiKey: key, apiSecret: secret, asManager } = settings
+  const hasKey = Boolean(key && secret)
+  const cacheKey = `${contestId}:${key}:${asManager}`
+  const cacheFile = cacheDir ? path.join(cacheDir, `contest-${contestId}.json`) : null
+
+  if (cached && cached.cacheKey === cacheKey && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload
   if (inflight) return inflight
   inflight = (async () => {
     try {
       const data = await fetchAll(contestId, key, secret, asManager)
       const payload = { ok: true, source: 'live', fetchedAt: Date.now(), ...data }
-      cached = { at: Date.now(), contestId, payload }
+      cached = { at: Date.now(), cacheKey, payload }
       if (cacheFile) {
         try {
           fs.mkdirSync(path.dirname(cacheFile), { recursive: true })
@@ -106,7 +121,7 @@ async function getRawContest(cacheFile) {
       return payload
     } catch (e) {
       console.warn(`[warn] Codeforces fetch failed: ${e.message}`)
-      if (cached && cached.contestId === contestId) {
+      if (cached && cached.cacheKey === cacheKey) {
         return { ...cached.payload, source: 'cache', error: e.message }
       }
       if (cacheFile && fs.existsSync(cacheFile)) {
@@ -122,7 +137,17 @@ async function getRawContest(cacheFile) {
   return inflight
 }
 
-export async function getContest({ isAdmin = false, cacheFile = null } = {}) {
-  const raw = await getRawContest(cacheFile)
-  return isAdmin ? raw : sanitizeForPublic(raw)
+export async function getContest({ isAdmin = false, cacheDir = null, settings = null } = {}) {
+  const s = settings ?? (await getSettings())
+  const raw = await getRawContest(s, cacheDir)
+  if (isAdmin) {
+    if (raw.ok && raw.standings && typeof s.freezeMinOverride === 'number') {
+      return {
+        ...raw,
+        standings: { ...raw.standings, contest: { ...raw.standings.contest, freezeDurationSeconds: s.freezeMinOverride * 60 } },
+      }
+    }
+    return raw
+  }
+  return sanitizeForPublic(raw, s)
 }

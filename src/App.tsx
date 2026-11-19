@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AdminLogin } from './components/AdminLogin'
+import { AdminSettings } from './components/AdminSettings'
 import { Controls } from './components/Controls'
 import { Feed, type FeedItem } from './components/Feed'
 import { Scoreboard } from './components/Scoreboard'
@@ -39,6 +40,7 @@ interface PageProps {
 function ScoreboardPage({ mode, theme, onToggleTheme, onLogout, onUnauthorized }: PageProps) {
   const isAdmin = mode === 'admin'
   const [paused, setPaused] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const { data, error, loading, reload } = useContestData(!paused, { isAdmin, onUnauthorized })
   const nowSec = useNowSec(data)
 
@@ -137,8 +139,20 @@ function ScoreboardPage({ mode, theme, onToggleTheme, onLogout, onUnauthorized }
       <div className="center">
         <p>⚠ {error ?? 'No data'}</p>
         <div>
-          <button onClick={reload}>Retry</button> <a href="?demo">Try demo data</a>
+          <button onClick={reload}>Retry</button>{' '}
+          {isAdmin && (
+            <button onClick={() => setSettingsOpen(true)}>⚙ Settings</button>
+          )}{' '}
+          <a href="?demo">Try demo data</a>
         </div>
+        {isAdmin && (
+          <AdminSettings
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+            onSaved={reload}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
       </div>
     )
 
@@ -211,6 +225,9 @@ function ScoreboardPage({ mode, theme, onToggleTheme, onLogout, onUnauthorized }
           <button onClick={onToggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '🌙'}</button>
           {isAdmin && (
             <>
+              <button onClick={() => setSettingsOpen(true)} disabled={!!st} title="Configure contest ID, API credentials, and freeze settings">
+                ⚙ Settings
+              </button>
               <a className="btn-link" href="/" target="_blank" rel="noreferrer" title="Open public user scoreboard">
                 Public view ↗
               </a>
@@ -275,6 +292,15 @@ function ScoreboardPage({ mode, theme, onToggleTheme, onLogout, onUnauthorized }
         <span className="legend"><i className="lg pending" /> Pending</span>
         <span className="legend"><i className="lg frozen" /> Frozen / hidden</span>
       </footer>
+
+      {isAdmin && (
+        <AdminSettings
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={reload}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
     </div>
   )
 }

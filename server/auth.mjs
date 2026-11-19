@@ -7,22 +7,23 @@ const SCRYPT_R = 8
 const SCRYPT_P = 1
 const SCRYPT_KEYLEN = 64
 
-export function getAdminPasswordHash() {
-  return process.env.ADMIN_PASSWORD_HASH || ''
+export function getAdminPasswordHash(settings) {
+  return settings?.adminPasswordHash ?? (process.env.ADMIN_PASSWORD_HASH || '')
 }
 
-export function getAdminPassword() {
-  return process.env.ADMIN_PASSWORD || ''
+export function getAdminPassword(settings) {
+  return settings?.adminPassword ?? (process.env.ADMIN_PASSWORD || '')
 }
 
-export function isAdminConfigured() {
-  return Boolean(getAdminPasswordHash() || getAdminPassword())
+export function isAdminConfigured(settings) {
+  return Boolean(getAdminPasswordHash(settings) || getAdminPassword(settings))
 }
 
-function signingKey() {
+function signingKey(settings) {
+  const apiSecret = settings?.apiSecret ?? (process.env.CF_API_SECRET || '')
   return crypto
     .createHash('sha256')
-    .update(`cf-live-scoreboard:${getAdminPasswordHash()}:${getAdminPassword()}:${process.env.CF_API_SECRET || ''}`)
+    .update(`cf-live-scoreboard:${getAdminPasswordHash(settings)}:${getAdminPassword(settings)}:${apiSecret}`)
     .digest()
 }
 
@@ -51,29 +52,29 @@ function verifyScryptHash(input, stored) {
   }
 }
 
-export function verifyPassword(input) {
+export function verifyPassword(input, settings) {
   if (typeof input !== 'string' || !input) return false
-  const storedHash = getAdminPasswordHash()
+  const storedHash = getAdminPasswordHash(settings)
   if (storedHash) return verifyScryptHash(input, storedHash)
-  const expected = getAdminPassword()
+  const expected = getAdminPassword(settings)
   if (!expected) return false
   const a = crypto.createHash('sha256').update(input).digest()
   const b = crypto.createHash('sha256').update(expected).digest()
   return crypto.timingSafeEqual(a, b)
 }
 
-export function signSession(nowSec = Math.floor(Date.now() / 1000)) {
+export function signSession(nowSec = Math.floor(Date.now() / 1000), settings) {
   const payload = Buffer.from(JSON.stringify({ role: 'admin', exp: nowSec + SESSION_TTL_SEC })).toString('base64url')
-  const sig = crypto.createHmac('sha256', signingKey()).update(payload).digest('base64url')
+  const sig = crypto.createHmac('sha256', signingKey(settings)).update(payload).digest('base64url')
   return `${payload}.${sig}`
 }
 
-export function verifySession(token, nowSec = Math.floor(Date.now() / 1000)) {
-  if (!isAdminConfigured() || typeof token !== 'string') return false
+export function verifySession(token, nowSec = Math.floor(Date.now() / 1000), settings) {
+  if (!isAdminConfigured(settings) || typeof token !== 'string') return false
   const parts = token.split('.')
   if (parts.length !== 2) return false
   const [payload, sig] = parts
-  const expected = crypto.createHmac('sha256', signingKey()).update(payload).digest('base64url')
+  const expected = crypto.createHmac('sha256', signingKey(settings)).update(payload).digest('base64url')
   const a = Buffer.from(sig)
   const b = Buffer.from(expected)
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false
@@ -105,12 +106,12 @@ export function parseCookies(req) {
   return out
 }
 
-export function isAdminRequest(req) {
+export function isAdminRequest(req, settings) {
   const cookies = parseCookies(req)
-  if (cookies[COOKIE_NAME] && verifySession(cookies[COOKIE_NAME])) return true
+  if (cookies[COOKIE_NAME] && verifySession(cookies[COOKIE_NAME], undefined, settings)) return true
   const auth = req?.headers?.authorization
   if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
-    return verifySession(auth.slice(7).trim())
+    return verifySession(auth.slice(7).trim(), undefined, settings)
   }
   return false
 }
