@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { AdminLogin } from './components/AdminLogin'
 import { Controls } from './components/Controls'
 import { Feed, type FeedItem } from './components/Feed'
 import { Scoreboard } from './components/Scoreboard'
 import { computeBoard, firstSolves, subVisual, verdictLabel, verifyAgainstOfficial } from './engine/scoring'
 import { stateFn } from './engine/reveal'
-import { useContestData, useNowSec, useReveal } from './hooks'
+import { useAdminSession, useContestData, useNowSec, useReveal } from './hooks'
 
 const hm = (sec: number) => {
   if (!isFinite(sec)) return '—'
@@ -27,16 +28,19 @@ const lsSet = (k: string, v: string) => {
   }
 }
 
-export default function App() {
-  const [paused, setPaused] = useState(false)
-  const { data, error, loading, reload } = useContestData(!paused)
-  const nowSec = useNowSec(data)
+interface PageProps {
+  mode: 'user' | 'admin'
+  theme: string
+  onToggleTheme(): void
+  onLogout?: () => void
+  onUnauthorized?: () => void
+}
 
-  const [theme, setTheme] = useState<string>(() => lsGet('theme') ?? (window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'))
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    lsSet('theme', theme)
-  }, [theme])
+function ScoreboardPage({ mode, theme, onToggleTheme, onLogout, onUnauthorized }: PageProps) {
+  const isAdmin = mode === 'admin'
+  const [paused, setPaused] = useState(false)
+  const { data, error, loading, reload } = useContestData(!paused, { isAdmin, onUnauthorized })
+  const nowSec = useNowSec(data)
 
   const [speed, setSpeed] = useState(() => Number(lsGet('speed')) || 3)
   useEffect(() => lsSet('speed', String(speed)), [speed])
@@ -47,18 +51,26 @@ export default function App() {
   const contestId = data?.contest.id ?? 0
   const [blindOverride, setBlindOverride] = useState<number | null>(null)
   useEffect(() => {
+    if (!isAdmin) {
+      setBlindOverride(null)
+      return
+    }
     const v = lsGet(`blind-${contestId}`)
     setBlindOverride(v ? Number(v) : null)
-  }, [contestId])
-  const blindMin = blindOverride ?? (data?.contest.freezeSec != null ? data.contest.freezeSec / 60 : 60)
+  }, [contestId, isAdmin])
+  const blindMin = (isAdmin ? blindOverride : null) ?? (data?.contest.freezeSec != null ? data.contest.freezeSec / 60 : 60)
   const freezeAt = data ? data.contest.durationSec - blindMin * 60 : Infinity
 
   const [showFinal, setShowFinal] = useState(false)
-  const frozen = !!data && !showFinal && nowSec >= freezeAt
-  const hiddenCount = useMemo(() => (data ? data.submissions.filter((s) => s.timeSec >= freezeAt && s.verdict !== null).length : 0), [data, freezeAt])
+  const effectiveShowFinal = isAdmin && showFinal
+  const frozen = !!data && !effectiveShowFinal && nowSec >= freezeAt
+  const hiddenCount = useMemo(
+    () => (data ? data.submissions.filter((s) => s.timeSec >= freezeAt && (!isAdmin || s.verdict !== null)).length : 0),
+    [data, freezeAt, isAdmin],
+  )
 
-  const reveal = useReveal(data, freezeAt, speed, moveMs)
-  const { st } = reveal
+  const reveal = useReveal(isAdmin ? data : null, freezeAt, speed, moveMs)
+  const st = isAdmin ? reveal.st : null
   useEffect(() => setPaused(st !== null), [st])
 
   const first = useMemo(() => (data ? firstSolves(data) : new Map<string, number>()), [data])
@@ -99,11 +111,12 @@ export default function App() {
     return out
   }, [data, st, frozen, freezeAt, teamName, first])
 
-  const verification = useMemo(() => (data && data.source !== 'demo' ? verifyAgainstOfficial(data) : null), [data])
+  const verification = useMemo(() => (isAdmin && data && data.source !== 'demo' ? verifyAgainstOfficial(data) : null), [isAdmin, data])
 
   const { running: revealRunning, setRunning: setRevealRunning, stepOnce } = reveal
-  // keyboard shortcuts
+  // keyboard shortcuts (admin unfreeze mode only)
   useEffect(() => {
+    if (!isAdmin) return
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return
       if (!st) return
@@ -116,21 +129,23 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [st, revealRunning, setRevealRunning, stepOnce])
+  }, [isAdmin, st, revealRunning, setRevealRunning, stepOnce])
 
   if (loading && !data) return <div className="center">Loading contest…</div>
   if (!data)
     return (
       <div className="center">
         <p>⚠ {error ?? 'No data'}</p>
-        <button onClick={reload}>Retry</button> <a href="?demo">Try demo data</a>
+        <div>
+          <button onClick={reload}>Retry</button> <a href="?demo">Try demo data</a>
+        </div>
       </div>
     )
 
   const phase = data.contest.phase
   const running = nowSec >= 0 && nowSec < Infinity && nowSec < data.contest.durationSec
   let startHint: string | null = null
-  if (showFinal) startHint = 'Turn off “Show final” to see the frozen standings.'
+  if (effectiveShowFinal) startHint = 'Turn off “Show final” to see the frozen standings.'
   else if (!frozen) startHint = `The scoreboard freezes at ${hm(freezeAt)} (contest time).`
   else if (hiddenCount === 0) startHint = 'No submissions were made during the frozen period.'
   else startHint = `${hiddenCount} hidden submissions${phase !== 'FINISHED' ? ' — contest is still running; this previews with manager data' : ''}.`
@@ -155,9 +170,12 @@ export default function App() {
       <header>
         <div className="title">
           <h1>{data.contest.name}</h1>
+          {isAdmin && <span className="badge admin">ADMIN</span>}
           <span className={`badge phase-${phase}`}>{phase.replace(/_/g, ' ')}</span>
           <span className="badge">{data.contest.type}</span>
-          <span className={`badge src-${data.source}`}>{data.source === 'demo' ? 'DEMO DATA' : data.source === 'cache' ? 'SAVED DATA' : data.managerView ? 'LIVE · manager view' : 'LIVE'}</span>
+          <span className={`badge src-${data.source}`}>
+            {data.source === 'demo' ? 'DEMO DATA' : data.source === 'cache' ? 'SAVED DATA' : isAdmin && data.managerView ? 'LIVE · manager view' : 'LIVE'}
+          </span>
           {verification && (
             <span className={`badge ${verification.mismatches.length ? 'warn' : 'ok'}`} title={verification.mismatches.slice(0, 20).join('\n') || 'Our scoring matches the official standings'}>
               {verification.mismatches.length ? `⚠ ${verification.mismatches.length} score mismatches` : `✓ matches official (${verification.checked})`}
@@ -166,27 +184,41 @@ export default function App() {
         </div>
         <div className="tools">
           <span className="clock" title="Contest time">⏱ {running ? hm(nowSec) : hm(data.contest.durationSec)}</span>
-          <label title="Length of the frozen (blind) period">
-            Blind
-            <input
-              type="number"
-              min={0}
-              max={Math.floor(data.contest.durationSec / 60)}
-              value={blindMin}
-              disabled={!!st}
-              onChange={(e) => {
-                const v = Math.max(0, Number(e.target.value) || 0)
-                setBlindOverride(v)
-                lsSet(`blind-${contestId}`, String(v))
-              }}
-            />
-            min
-          </label>
-          <label>
-            <input type="checkbox" checked={showFinal} disabled={!!st} onChange={(e) => setShowFinal(e.target.checked)} /> Show final
-          </label>
+          {isAdmin && (
+            <>
+              <label title="Length of the frozen (blind) period">
+                Blind
+                <input
+                  type="number"
+                  min={0}
+                  max={Math.floor(data.contest.durationSec / 60)}
+                  value={blindMin}
+                  disabled={!!st}
+                  onChange={(e) => {
+                    const v = Math.max(0, Number(e.target.value) || 0)
+                    setBlindOverride(v)
+                    lsSet(`blind-${contestId}`, String(v))
+                  }}
+                />
+                min
+              </label>
+              <label>
+                <input type="checkbox" checked={showFinal} disabled={!!st} onChange={(e) => setShowFinal(e.target.checked)} /> Show final
+              </label>
+            </>
+          )}
           <button onClick={reload} disabled={!!st || data.source === 'demo'} title="Refresh data">⟳</button>
-          <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Toggle theme">{theme === 'dark' ? '☀' : '🌙'}</button>
+          <button onClick={onToggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '🌙'}</button>
+          {isAdmin && (
+            <>
+              <a className="btn-link" href="/" target="_blank" rel="noreferrer" title="Open public user scoreboard">
+                Public view ↗
+              </a>
+              <button onClick={onLogout} title="Sign out of admin">
+                Log out
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -198,27 +230,29 @@ export default function App() {
         </div>
       )}
 
-      <Controls
-        active={!!st}
-        canStart={frozen && hiddenCount > 0}
-        startHint={startHint}
-        running={reveal.running}
-        finished={st?.phase === 'finished'}
-        busy={st?.phase === 'pending'}
-        speed={speed}
-        follow={follow}
-        onFollow={setFollow}
-        revealed={st?.revealed ?? 0}
-        total={st?.total ?? 0}
-        message={message}
-        onStart={reveal.start}
-        onToggle={() => reveal.setRunning((r) => !r)}
-        onNext={reveal.stepOnce}
-        onRestart={reveal.restart}
-        onSkip={reveal.skip}
-        onExit={reveal.exit}
-        onSpeed={setSpeed}
-      />
+      {isAdmin && (
+        <Controls
+          active={!!st}
+          canStart={frozen && hiddenCount > 0}
+          startHint={startHint}
+          running={reveal.running}
+          finished={st?.phase === 'finished'}
+          busy={st?.phase === 'pending'}
+          speed={speed}
+          follow={follow}
+          onFollow={setFollow}
+          revealed={st?.revealed ?? 0}
+          total={st?.total ?? 0}
+          message={message}
+          onStart={reveal.start}
+          onToggle={() => reveal.setRunning((r) => !r)}
+          onNext={reveal.stepOnce}
+          onRestart={reveal.restart}
+          onSkip={reveal.skip}
+          onExit={reveal.exit}
+          onSpeed={setSpeed}
+        />
+      )}
 
       <main>
         <Scoreboard
@@ -242,5 +276,48 @@ export default function App() {
         <span className="legend"><i className="lg frozen" /> Frozen / hidden</span>
       </footer>
     </div>
+  )
+}
+
+export default function App() {
+  const isAdminRoute = /^\/admin(\/|$)/.test(window.location.pathname)
+  const [theme, setTheme] = useState<string>(() => lsGet('theme') ?? (window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'))
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    lsSet('theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+  const admin = useAdminSession(isAdminRoute)
+
+  if (!isAdminRoute) {
+    return <ScoreboardPage mode="user" theme={theme} onToggleTheme={toggleTheme} />
+  }
+
+  if (admin.checking) {
+    return <div className="center">Checking admin session…</div>
+  }
+
+  if (!admin.authenticated) {
+    return (
+      <AdminLogin
+        configured={admin.configured}
+        error={admin.authError}
+        submitting={admin.submitting}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onLogin={admin.login}
+      />
+    )
+  }
+
+  return (
+    <ScoreboardPage
+      mode="admin"
+      theme={theme}
+      onToggleTheme={toggleTheme}
+      onLogout={admin.logout}
+      onUnauthorized={admin.expire}
+    />
   )
 }

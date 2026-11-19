@@ -176,3 +176,26 @@ footer { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; font-size:
   h1 { font-size: 17px; }
   .speed input { width: 80px; }
 }
+
+/* ---- admin & login ---- */
+.badge.admin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); font-weight: 700; }
+.btn-link {
+  display: inline-flex; align-items: center; gap: 4px; text-decoration: none; color: var(--text);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-size: 14px;
+}
+.btn-link:hover { border-color: var(--accent); }
+
+.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.login-card {
+  width: 100%; max-width: 400px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 14px;
+}
+.login-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.login-head h1 { margin-top: 6px; font-size: 22px; }
+.login-form { display: flex; flex-direction: column; gap: 12px; }
+.login-form label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; }
+.login-form input[type='password'] {
+  width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px;
+}
+.login-form input[type='password']:focus { outline: none; border-color: var(--accent); }
+.login-foot { font-size: 13px; padding-top: 4px; border-top: 1px solid var(--line); }

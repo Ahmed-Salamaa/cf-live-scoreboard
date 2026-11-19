@@ -6,50 +6,146 @@ import type { ContestData } from './engine/types'
 
 const POLL_MS = 15000
 
-export function useContestData(pollingEnabled: boolean) {
+export interface ContestDataOptions {
+  isAdmin?: boolean
+  enabled?: boolean
+  onUnauthorized?: () => void
+}
+
+export function useContestData(pollingEnabled: boolean, opts: ContestDataOptions = {}) {
+  const { isAdmin = false, enabled = true, onUnauthorized } = opts
   const [data, setData] = useState<ContestData | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(enabled)
   const enabledRef = useRef(pollingEnabled)
   enabledRef.current = pollingEnabled
+  const onUnauthRef = useRef(onUnauthorized)
+  onUnauthRef.current = onUnauthorized
 
-  const load = useCallback(async (fromPoll = false) => {
-    try {
-      if (new URLSearchParams(location.search).has('demo')) {
-        setData((d) => d ?? makeDemo())
-        setError(null)
-        return
+  const load = useCallback(
+    async (fromPoll = false) => {
+      if (!enabled) return
+      try {
+        if (new URLSearchParams(location.search).has('demo')) {
+          setData((d) => d ?? makeDemo())
+          setError(null)
+          return
+        }
+        const endpoint = isAdmin ? '/api/contest?admin=1' : '/api/contest'
+        const res = await fetch(endpoint, { credentials: 'same-origin' })
+        if (res.status === 401) {
+          onUnauthRef.current?.()
+          return
+        }
+        const json = await res.json()
+        if (fromPoll && !enabledRef.current) return
+        if (json.ok) {
+          setData(normalize(json))
+          setError(json.error ? `Showing saved data (${json.error})` : null)
+        } else if (json.demo) {
+          setData((d) => d ?? makeDemo())
+          setError(null)
+        } else setError(json.error || 'Failed to load contest')
+      } catch (e) {
+        if (!fromPoll || enabledRef.current) setError(String(e))
+      } finally {
+        setLoading(false)
       }
-      const res = await fetch('/api/contest')
-      const json = await res.json()
-      if (fromPoll && !enabledRef.current) return
-      if (json.ok) {
-        setData(normalize(json))
-        setError(json.error ? `Showing saved data (${json.error})` : null)
-      } else if (json.demo) {
-        setData((d) => d ?? makeDemo())
-        setError(null)
-      } else setError(json.error || 'Failed to load contest')
-    } catch (e) {
-      if (!fromPoll || enabledRef.current) setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+    },
+    [enabled, isAdmin],
+  )
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false)
+      return
+    }
+    setLoading(true)
     load(false)
-  }, [load])
+  }, [enabled, load])
 
   const live = data && data.source !== 'demo' && data.contest.phase !== 'FINISHED'
   useEffect(() => {
-    if (!pollingEnabled || !live) return
+    if (!enabled || !pollingEnabled || !live) return
     const t = setInterval(() => load(true), POLL_MS)
     return () => clearInterval(t)
-  }, [pollingEnabled, live, load])
+  }, [enabled, pollingEnabled, live, load])
 
   const reload = useCallback(() => load(false), [load])
   return { data, error, loading, reload }
+}
+
+export function useAdminSession(active: boolean) {
+  const [checking, setChecking] = useState(active)
+  const [authenticated, setAuthenticated] = useState(false)
+  const [configured, setConfigured] = useState(true)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!active) {
+      setChecking(false)
+      return
+    }
+    let cancelled = false
+    setChecking(true)
+    fetch('/api/admin/session', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return
+        setAuthenticated(Boolean(j.authenticated))
+        setConfigured(j.configured !== false)
+      })
+      .catch(() => {
+        if (!cancelled) setAuthError('Could not verify admin session.')
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
+  const login = useCallback(async (password: string) => {
+    setSubmitting(true)
+    setAuthError(null)
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ password }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (res.ok && json.ok) {
+        setAuthenticated(true)
+        return true
+      }
+      setAuthError(json.error || 'Login failed.')
+      return false
+    } catch (e) {
+      setAuthError(String(e))
+      return false
+    } finally {
+      setSubmitting(false)
+    }
+  }, [])
+
+  const logout = useCallback(async () => {
+    try {
+      await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' })
+    } finally {
+      setAuthenticated(false)
+    }
+  }, [])
+
+  const expire = useCallback(() => {
+    setAuthenticated(false)
+    setAuthError('Your admin session expired. Please sign in again.')
+  }, [])
+
+  return { checking, authenticated, configured, authError, submitting, login, logout, expire }
 }
 
 /** Estimated seconds since contest start; Infinity once the contest is finished. */

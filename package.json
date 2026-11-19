@@ -8,6 +8,7 @@
     "build": "vite build",
     "start": "vite build && node server/server.mjs",
     "serve": "node server/server.mjs",
+    "hash-password": "node server/hash-password.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

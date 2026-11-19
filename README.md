@@ -7,12 +7,15 @@ Built for contest **732371** (private, ICPC), but works for any contest id.
 
 ```bash
 npm install
-cp .env.example .env      # then fill in CF_API_KEY and CF_API_SECRET
-npm start                 # builds, then serves on http://localhost:5173
+cp .env.example .env      # fill in CF_API_KEY, CF_API_SECRET, ADMIN_PASSWORD
+npm start                 # builds, then serves User (/) and Admin (/admin) on http://localhost:5173
 ```
 
+- **User page** (`/`): public, read-only live scoreboard. Hidden verdicts are stripped on the server during the freeze so they cannot leak via DevTools.
+- **Admin page** (`/admin`): password-protected (`ADMIN_PASSWORD_HASH`, salted `scrypt` hash generated via `npm run hash-password`) dashboard with manager view, official score cross-check, blind-time override, and progressive unfreezing controls.
+- **Vercel**: [vercel.json](vercel.json) routes `/` and `/admin` to the SPA and `/api/*` to serverless functions in `api/`. Set `CF_CONTEST_ID`, `CF_API_KEY`, `CF_API_SECRET`, `CF_AS_MANAGER`, and `ADMIN_PASSWORD_HASH` in Vercel Environment Variables.
 - `npm run dev` – same, with hot reload.
-- `npm test` / `npm run typecheck` – engine tests / type check.
+- `npm test` / `npm run typecheck` – engine & auth tests / type check.
 - Without a key the app shows **DEMO DATA** (clearly labelled). You can also force it with `http://localhost:5173/?demo`.
 
 ### Getting API access (do this BEFORE the contest)
