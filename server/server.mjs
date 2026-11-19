@@ -112,7 +112,13 @@ if (isDev) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost')
+  let url
+  try {
+    url = new URL(req.url || '/', 'http://localhost')
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' })
+    return res.end('Bad Request')
+  }
   if (url.pathname === '/api/config') return sendJson(res, { contestId: CONTEST, hasKey: HAS_KEY, asManager: AS_MANAGER })
   if (url.pathname === '/api/contest') return sendJson(res, await getContest())
   if (vite) return vite.middlewares(req, res, () => { res.statusCode = 404; res.end('Not found') })

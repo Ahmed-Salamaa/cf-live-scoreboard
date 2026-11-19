@@ -40,9 +40,10 @@ export function normalize(raw: RawContestPayload): ContestData {
   }
   const submissions: Submission[] = []
   for (const s of raw.submissions) {
+    if (s.author?.participantType && s.author.participantType !== 'CONTESTANT') continue
     const teamId = partyKey(s.author)
     if (!known.has(teamId)) continue
-    if (s.relativeTimeSeconds > durationSec) continue
+    if (s.relativeTimeSeconds < 0 || s.relativeTimeSeconds > durationSec) continue
     const verdict = s.verdict && s.verdict !== 'TESTING' ? s.verdict : null
     submissions.push({ id: s.id, teamId, problem: s.problem.index, timeSec: s.relativeTimeSeconds, verdict })
   }

@@ -185,9 +185,13 @@ describe('reveal', () => {
     }
   })
 
-  it('revealAll matches the step-by-step result', () => {
+  it('revealAll matches the step-by-step result, including mid-pending reveal', () => {
     const d = makeDemoLike()
-    const full = revealAll(d, initReveal(d, 240 * 60))
+    const midPending = pickNext(d, initReveal(d, 240 * 60))
+    expect(midPending.phase).toBe('pending')
+    const full = revealAll(d, midPending)
+    expect(full.curTeamId).toBeNull()
+    expect(full.states.get(midPending.curSubId!)).toBe('final')
     const { st } = runAll(d, 240 * 60)
     expect(computeBoard(d, stateFn(full)).map((r) => [r.team.id, r.solved, r.penalty])).toEqual(
       computeBoard(d, stateFn(st)).map((r) => [r.team.id, r.solved, r.penalty]),
@@ -235,10 +239,12 @@ describe('normalize (Codeforces API shape)', () => {
         ],
       },
       submissions: [
-        { id: 3, author: party('alice', 5, 'Team Five'), problem: { index: 'A' }, relativeTimeSeconds: 1980, verdict: 'OK' },
-        { id: 2, author: party('bob'), problem: { index: 'A' }, relativeTimeSeconds: 100, verdict: 'TESTING' },
+        { id: 3, author: { ...party('alice', 5, 'Team Five'), participantType: 'CONTESTANT' }, problem: { index: 'A' }, relativeTimeSeconds: 1980, verdict: 'OK' },
+        { id: 2, author: { ...party('bob'), participantType: 'CONTESTANT' }, problem: { index: 'A' }, relativeTimeSeconds: 100, verdict: 'TESTING' },
         { id: 1, author: party('ghost'), problem: { index: 'A' }, relativeTimeSeconds: 50, verdict: 'OK' }, // not in roster
         { id: 4, author: party('bob'), problem: { index: 'A' }, relativeTimeSeconds: 99999, verdict: 'OK' }, // upsolving
+        { id: 5, author: { ...party('bob'), participantType: 'VIRTUAL' }, problem: { index: 'A' }, relativeTimeSeconds: 120, verdict: 'OK' }, // virtual
+        { id: 6, author: { ...party('bob'), participantType: 'CONTESTANT' }, problem: { index: 'A' }, relativeTimeSeconds: -10, verdict: 'OK' }, // negative time
       ],
     }
     const d = normalize(raw)

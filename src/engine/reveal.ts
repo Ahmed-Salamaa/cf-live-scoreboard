@@ -183,6 +183,6 @@ export function resolveCurrent(data: ContestData, st: RevealState): RevealState 
 /** Jump straight to the final standings. */
 export function revealAll(_data: ContestData, st: RevealState): RevealState {
   const states = new Map<number, SubState>()
-  for (const [id, s] of st.states) states.set(id, s === 'hidden' ? 'final' : s)
-  return { ...st, states, phase: 'finished', curSubId: null, revealed: st.total, move: null, version: st.version + 1 }
+  for (const [id, s] of st.states) states.set(id, s === 'hidden' || id === st.curSubId ? 'final' : s)
+  return { ...st, states, phase: 'finished', curSubId: null, curTeamId: null, revealed: st.total, move: null, version: st.version + 1 }
 }

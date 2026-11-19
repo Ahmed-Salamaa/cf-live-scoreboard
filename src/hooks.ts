@@ -10,8 +10,10 @@ export function useContestData(pollingEnabled: boolean) {
   const [data, setData] = useState<ContestData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const enabledRef = useRef(pollingEnabled)
+  enabledRef.current = pollingEnabled
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fromPoll = false) => {
     try {
       if (new URLSearchParams(location.search).has('demo')) {
         setData((d) => d ?? makeDemo())
@@ -20,6 +22,7 @@ export function useContestData(pollingEnabled: boolean) {
       }
       const res = await fetch('/api/contest')
       const json = await res.json()
+      if (fromPoll && !enabledRef.current) return
       if (json.ok) {
         setData(normalize(json))
         setError(json.error ? `Showing saved data (${json.error})` : null)
@@ -28,24 +31,25 @@ export function useContestData(pollingEnabled: boolean) {
         setError(null)
       } else setError(json.error || 'Failed to load contest')
     } catch (e) {
-      setError(String(e))
+      if (!fromPoll || enabledRef.current) setError(String(e))
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    load()
+    load(false)
   }, [load])
 
   const live = data && data.source !== 'demo' && data.contest.phase !== 'FINISHED'
   useEffect(() => {
     if (!pollingEnabled || !live) return
-    const t = setInterval(load, POLL_MS)
+    const t = setInterval(() => load(true), POLL_MS)
     return () => clearInterval(t)
   }, [pollingEnabled, live, load])
 
-  return { data, error, loading, reload: load }
+  const reload = useCallback(() => load(false), [load])
+  return { data, error, loading, reload }
 }
 
 /** Estimated seconds since contest start; Infinity once the contest is finished. */

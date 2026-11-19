@@ -50,7 +50,7 @@ export default function App() {
     const v = lsGet(`blind-${contestId}`)
     setBlindOverride(v ? Number(v) : null)
   }, [contestId])
-  const blindMin = blindOverride ?? (data?.contest.freezeSec ? data.contest.freezeSec / 60 : 60)
+  const blindMin = blindOverride ?? (data?.contest.freezeSec != null ? data.contest.freezeSec / 60 : 60)
   const freezeAt = data ? data.contest.durationSec - blindMin * 60 : Infinity
 
   const [showFinal, setShowFinal] = useState(false)
@@ -75,8 +75,8 @@ export default function App() {
     if (st) {
       const items: FeedItem[] = []
       if (st.curSubId != null) {
-        const s = data.submissions.find((x) => x.id === st.curSubId)!
-        items.push({ key: `p${s.id}`, team: teamName.get(s.teamId) ?? s.teamId, problem: s.problem, verdict: null, visual: 'pending', timeSec: s.timeSec })
+        const s = data.submissions.find((x) => x.id === st.curSubId)
+        if (s) items.push({ key: `p${s.id}`, team: teamName.get(s.teamId) ?? s.teamId, problem: s.problem, verdict: null, visual: 'pending', timeSec: s.timeSec })
       }
       for (let i = st.log.length - 1; i >= 0 && items.length < 80; i--) {
         const l = st.log[i]
@@ -101,6 +101,7 @@ export default function App() {
 
   const verification = useMemo(() => (data && data.source !== 'demo' ? verifyAgainstOfficial(data) : null), [data])
 
+  const { running: revealRunning, setRunning: setRevealRunning, stepOnce } = reveal
   // keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -108,14 +109,14 @@ export default function App() {
       if (!st) return
       if (e.code === 'Space') {
         e.preventDefault()
-        if (st.phase !== 'finished') reveal.setRunning((r) => !r)
+        if (st.phase !== 'finished') setRevealRunning((r) => !r)
       } else if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'n') {
-        if (!reveal.running) reveal.stepOnce()
+        if (!revealRunning) stepOnce()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [st, reveal])
+  }, [st, revealRunning, setRevealRunning, stepOnce])
 
   if (loading && !data) return <div className="center">Loading contest…</div>
   if (!data)
@@ -127,7 +128,7 @@ export default function App() {
     )
 
   const phase = data.contest.phase
-  const running = nowSec < Infinity && nowSec < data.contest.durationSec
+  const running = nowSec >= 0 && nowSec < Infinity && nowSec < data.contest.durationSec
   let startHint: string | null = null
   if (showFinal) startHint = 'Turn off “Show final” to see the frozen standings.'
   else if (!frozen) startHint = `The scoreboard freezes at ${hm(freezeAt)} (contest time).`
@@ -138,8 +139,8 @@ export default function App() {
   if (st) {
     if (st.phase === 'finished') message = '🏁 Final standings revealed.'
     else if (st.phase === 'pending' && st.curSubId != null) {
-      const s = data.submissions.find((x) => x.id === st.curSubId)!
-      message = `Revealing ${teamName.get(s.teamId)} · problem ${s.problem} …`
+      const s = data.submissions.find((x) => x.id === st.curSubId)
+      if (s) message = `Revealing ${teamName.get(s.teamId)} · problem ${s.problem} …`
     } else if (st.log.length) {
       const l = st.log[st.log.length - 1]
       const mv = l.from !== l.to ? ` · #${l.from} → #${l.to}` : ''
