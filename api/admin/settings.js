@@ -1,4 +1,4 @@
-import { hashPassword, isAdminRequest, readJsonBody, sessionCookieHeader, signSession } from '../../server/auth.mjs'
+import { getAdminSession, hashPassword, maybeRefreshCookieHeader, readJsonBody, sessionCookieHeader, signSession } from '../../server/auth.mjs'
 import { invalidateContestCache } from '../../server/cf.mjs'
 import { getSettings, toSafeAdminSettings, updateSettings } from '../../server/settings.mjs'
 
@@ -7,13 +7,16 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'private, no-store')
 
   const settings = await getSettings()
-  if (!isAdminRequest(req, settings)) {
+  const session = getAdminSession(req, settings)
+  if (!session) {
     res.statusCode = 401
     res.end(JSON.stringify({ ok: false, unauthorized: true, error: 'Admin login required' }))
     return
   }
 
   if (req.method === 'GET') {
+    const refreshCookie = maybeRefreshCookieHeader(session, req, settings)
+    if (refreshCookie) res.setHeader('Set-Cookie', refreshCookie)
     res.statusCode = 200
     res.end(JSON.stringify({ ok: true, settings: toSafeAdminSettings(settings) }))
     return
@@ -56,8 +59,11 @@ export default async function handler(req, res) {
   try {
     const updated = await updateSettings(patch)
     invalidateContestCache()
-    // Re-issue session cookie with the latest signing key in case apiSecret or password changed
-    res.setHeader('Set-Cookie', sessionCookieHeader(signSession(undefined, updated), req))
+    // Re-issue JWT with the latest signing key while preserving the original maxExp cap
+    const nowSec = Math.floor(Date.now() / 1000)
+    const token = signSession(nowSec, updated, session.maxExp)
+    const maxAge = Math.max(1, Math.min(nowSec + 15 * 60, session.maxExp) - nowSec)
+    res.setHeader('Set-Cookie', sessionCookieHeader(token, req, maxAge))
     res.statusCode = 200
     res.end(JSON.stringify({ ok: true, settings: toSafeAdminSettings(updated) }))
   } catch (e) {

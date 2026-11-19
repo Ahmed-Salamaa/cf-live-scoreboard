@@ -1,4 +1,4 @@
-import { isAdminRequest } from '../server/auth.mjs'
+import { getAdminSession, maybeRefreshCookieHeader } from '../server/auth.mjs'
 import { getContest } from '../server/cf.mjs'
 import { getSettings } from '../server/settings.mjs'
 
@@ -16,11 +16,14 @@ export default async function handler(req, res) {
 
   if (wantsAdmin) {
     res.setHeader('Cache-Control', 'private, no-store')
-    if (!isAdminRequest(req, settings)) {
+    const session = getAdminSession(req, settings)
+    if (!session) {
       res.statusCode = 401
       res.end(JSON.stringify({ ok: false, unauthorized: true, error: 'Admin login required' }))
       return
     }
+    const refreshCookie = maybeRefreshCookieHeader(session, req, settings)
+    if (refreshCookie) res.setHeader('Set-Cookie', refreshCookie)
     const payload = await getContest({ isAdmin: true, settings })
     res.statusCode = 200
     res.end(JSON.stringify(payload))

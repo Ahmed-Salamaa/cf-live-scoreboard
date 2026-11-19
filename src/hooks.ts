@@ -145,6 +145,30 @@ export function useAdminSession(active: boolean) {
     setAuthError('Your admin session expired. Please sign in again.')
   }, [])
 
+  // Keep the short-lived JWT sliding ONLY while the admin tab is open & visible (up to server maxExp cap).
+  useEffect(() => {
+    if (!active || !authenticated) return
+    const check = async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const res = await fetch('/api/admin/session', { credentials: 'same-origin' })
+        const json = await res.json().catch(() => null)
+        if (json && json.authenticated === false) expire()
+      } catch {
+        /* ignore transient network errors */
+      }
+    }
+    const t = setInterval(check, 5 * 60 * 1000)
+    const onVis = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [active, authenticated, expire])
+
   return { checking, authenticated, configured, authError, submitting, login, logout, expire }
 }
 

@@ -1,5 +1,17 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { checkLoginRateLimit, clearLoginFailures, hashPassword, recordLoginFailure, signSession, verifyPassword, verifySession } from './auth.mjs'
+import {
+  JWT_ABSOLUTE_MAX_SEC,
+  JWT_SLIDING_TTL_SEC,
+  checkLoginRateLimit,
+  clearLoginFailures,
+  hashPassword,
+  recordLoginFailure,
+  refreshSession,
+  signSession,
+  verifyPassword,
+  verifySession,
+  verifySessionPayload,
+} from './auth.mjs'
 import { sanitizeForPublic } from './cf.mjs'
 import { toSafeAdminSettings } from './settings.mjs'
 
@@ -37,12 +49,44 @@ describe('admin auth', () => {
     expect(verifyPassword('super-secret-password')).toBe(false)
   })
 
-  it('signs and verifies stateless session tokens and rejects tampered or expired tokens', () => {
+  it('signs and verifies short-lived HS256 JWTs, rejects alg:none/tampered/expired, and caps sliding refresh at maxExp', () => {
     const now = 1700000000
     const token = signSession(now)
-    expect(verifySession(token, now + 10)).toBe(true)
+    const parts = token.split('.')
+    expect(parts.length).toBe(3)
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'))
+    expect(header).toEqual({ alg: 'HS256', typ: 'JWT' })
+
+    // Valid within 15m sliding window
+    const payload = verifySessionPayload(token, now + 60)
+    expect(payload).not.toBeNull()
+    expect(payload.exp).toBe(now + JWT_SLIDING_TTL_SEC)
+    expect(payload.maxExp).toBe(now + JWT_ABSOLUTE_MAX_SEC)
+
+    // Rejects tampered, alg:none, and expired (>15m idle)
     expect(verifySession(token + 'x', now + 10)).toBe(false)
-    expect(verifySession(token, now + 60 * 60 * 24)).toBe(false)
+    const noneHeader = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
+    expect(verifySession(`${noneHeader}.${parts[1]}.`, now + 10)).toBe(false)
+    expect(verifySession(token, now + JWT_SLIDING_TTL_SEC + 1)).toBe(false)
+
+    // Does not refresh too early (< 2 min)
+    expect(refreshSession(payload, now + 30)).toBeNull()
+
+    // Slides exp forward after 5 min while preserving original maxExp
+    const refreshed = refreshSession(payload, now + 5 * 60)
+    expect(refreshed).not.toBeNull()
+    const nextPayload = verifySessionPayload(refreshed.token, now + 5 * 60 + 1)
+    expect(nextPayload.exp).toBe(now + 5 * 60 + JWT_SLIDING_TTL_SEC)
+    expect(nextPayload.maxExp).toBe(payload.maxExp)
+
+    // Clamps exp to maxExp near the 4h absolute cap and refuses refresh once cap is reached
+    const nearCap = now + JWT_ABSOLUTE_MAX_SEC - 60
+    const clamped = refreshSession(nextPayload, nearCap)
+    expect(clamped).not.toBeNull()
+    const clampedPayload = verifySessionPayload(clamped.token, nearCap + 1)
+    expect(clampedPayload.exp).toBe(payload.maxExp)
+    expect(refreshSession(clampedPayload, payload.maxExp)).toBeNull()
+    expect(verifySession(clamped.token, payload.maxExp + 1)).toBe(false)
   })
 
   it('rate-limits repeated failed logins per IP and clears on success', () => {

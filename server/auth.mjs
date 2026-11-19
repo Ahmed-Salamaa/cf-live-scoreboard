@@ -1,7 +1,9 @@
 import crypto from 'node:crypto'
 
 export const COOKIE_NAME = 'cf_admin'
-const SESSION_TTL_SEC = 60 * 60 * 12 // 12 hours
+export const JWT_SLIDING_TTL_SEC = 15 * 60 // 15 minutes idle/sliding limit
+export const JWT_ABSOLUTE_MAX_SEC = 4 * 60 * 60 // 4 hours hard cap (cannot refresh forever)
+const JWT_REFRESH_AFTER_SEC = 2 * 60 // re-issue cookie if older than 2 minutes
 const SCRYPT_N = 16384
 const SCRYPT_R = 8
 const SCRYPT_P = 1
@@ -21,9 +23,10 @@ export function isAdminConfigured(settings) {
 
 function signingKey(settings) {
   const apiSecret = settings?.apiSecret ?? (process.env.CF_API_SECRET || '')
+  const jwtSecret = process.env.JWT_SECRET || ''
   return crypto
     .createHash('sha256')
-    .update(`cf-live-scoreboard:${getAdminPasswordHash(settings)}:${getAdminPassword(settings)}:${apiSecret}`)
+    .update(`cf-live-scoreboard-jwt:${jwtSecret}:${getAdminPasswordHash(settings)}:${getAdminPassword(settings)}:${apiSecret}`)
     .digest()
 }
 
@@ -63,27 +66,72 @@ export function verifyPassword(input, settings) {
   return crypto.timingSafeEqual(a, b)
 }
 
-export function signSession(nowSec = Math.floor(Date.now() / 1000), settings) {
-  const payload = Buffer.from(JSON.stringify({ role: 'admin', exp: nowSec + SESSION_TTL_SEC })).toString('base64url')
-  const sig = crypto.createHmac('sha256', signingKey(settings)).update(payload).digest('base64url')
-  return `${payload}.${sig}`
+const JWT_HEADER_B64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+
+/**
+ * Sign a short-lived HS256 JWT (15m sliding expiry, 4h absolute maxExp cap).
+ * Pass `maxExp` when refreshing an existing session so the absolute cap is preserved.
+ */
+export function signSession(nowSec = Math.floor(Date.now() / 1000), settings, maxExp = nowSec + JWT_ABSOLUTE_MAX_SEC) {
+  const cappedMax = Math.min(maxExp, nowSec + JWT_ABSOLUTE_MAX_SEC)
+  const exp = Math.min(nowSec + JWT_SLIDING_TTL_SEC, cappedMax)
+  const payload = Buffer.from(
+    JSON.stringify({ sub: 'admin', role: 'admin', iat: nowSec, exp, maxExp: cappedMax }),
+  ).toString('base64url')
+  const signingInput = `${JWT_HEADER_B64}.${payload}`
+  const sig = crypto.createHmac('sha256', signingKey(settings)).update(signingInput).digest('base64url')
+  return `${signingInput}.${sig}`
+}
+
+/** Verify an HS256 JWT and return its decoded payload, or null if invalid/expired. */
+export function verifySessionPayload(token, nowSec = Math.floor(Date.now() / 1000), settings) {
+  if (!isAdminConfigured(settings) || typeof token !== 'string') return null
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  const [headerB64, payloadB64, sig] = parts
+  try {
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'))
+    if (header?.alg !== 'HS256' || header?.typ !== 'JWT') return null
+  } catch {
+    return null
+  }
+  const signingInput = `${headerB64}.${payloadB64}`
+  const expected = crypto.createHmac('sha256', signingKey(settings)).update(signingInput).digest('base64url')
+  const a = Buffer.from(sig)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+  try {
+    const data = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'))
+    if (
+      data?.role !== 'admin' ||
+      typeof data.iat !== 'number' ||
+      typeof data.exp !== 'number' ||
+      typeof data.maxExp !== 'number'
+    ) {
+      return null
+    }
+    if (data.exp <= nowSec || data.maxExp <= nowSec || data.exp > data.maxExp) return null
+    return data
+  } catch {
+    return null
+  }
 }
 
 export function verifySession(token, nowSec = Math.floor(Date.now() / 1000), settings) {
-  if (!isAdminConfigured(settings) || typeof token !== 'string') return false
-  const parts = token.split('.')
-  if (parts.length !== 2) return false
-  const [payload, sig] = parts
-  const expected = crypto.createHmac('sha256', signingKey(settings)).update(payload).digest('base64url')
-  const a = Buffer.from(sig)
-  const b = Buffer.from(expected)
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false
-  try {
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
-    return data?.role === 'admin' && typeof data.exp === 'number' && data.exp > nowSec
-  } catch {
-    return false
-  }
+  return verifySessionPayload(token, nowSec, settings) !== null
+}
+
+/**
+ * Refresh a valid JWT if it is older than JWT_REFRESH_AFTER_SEC and still before maxExp.
+ * Returns { token, maxAge } or null if no refresh is needed or possible.
+ */
+export function refreshSession(payload, nowSec = Math.floor(Date.now() / 1000), settings) {
+  if (!payload || nowSec >= payload.maxExp) return null
+  if (nowSec - payload.iat < JWT_REFRESH_AFTER_SEC) return null
+  const nextExp = Math.min(nowSec + JWT_SLIDING_TTL_SEC, payload.maxExp)
+  if (nextExp <= payload.exp) return null
+  const token = signSession(nowSec, settings, payload.maxExp)
+  return { token, maxAge: Math.max(1, nextExp - nowSec) }
 }
 
 export function parseCookies(req) {
@@ -106,24 +154,36 @@ export function parseCookies(req) {
   return out
 }
 
-export function isAdminRequest(req, settings) {
+export function getAdminSession(req, settings, nowSec = Math.floor(Date.now() / 1000)) {
   const cookies = parseCookies(req)
-  if (cookies[COOKIE_NAME] && verifySession(cookies[COOKIE_NAME], undefined, settings)) return true
+  if (cookies[COOKIE_NAME]) {
+    const payload = verifySessionPayload(cookies[COOKIE_NAME], nowSec, settings)
+    if (payload) return payload
+  }
   const auth = req?.headers?.authorization
   if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
-    return verifySession(auth.slice(7).trim(), undefined, settings)
+    return verifySessionPayload(auth.slice(7).trim(), nowSec, settings)
   }
-  return false
+  return null
+}
+
+export function isAdminRequest(req, settings) {
+  return getAdminSession(req, settings) !== null
 }
 
 function isHttps(req) {
   return Boolean(process.env.VERCEL || req?.headers?.['x-forwarded-proto'] === 'https')
 }
 
-export function sessionCookieHeader(token, req) {
-  const parts = [`${COOKIE_NAME}=${encodeURIComponent(token)}`, 'HttpOnly', 'SameSite=Lax', 'Path=/', `Max-Age=${SESSION_TTL_SEC}`]
+export function sessionCookieHeader(token, req, maxAge = JWT_SLIDING_TTL_SEC) {
+  const parts = [`${COOKIE_NAME}=${encodeURIComponent(token)}`, 'HttpOnly', 'SameSite=Lax', 'Path=/', `Max-Age=${maxAge}`]
   if (isHttps(req)) parts.push('Secure')
   return parts.join('; ')
+}
+
+export function maybeRefreshCookieHeader(session, req, settings) {
+  const refreshed = refreshSession(session, undefined, settings)
+  return refreshed ? sessionCookieHeader(refreshed.token, req, refreshed.maxAge) : null
 }
 
 export function clearCookieHeader(req) {

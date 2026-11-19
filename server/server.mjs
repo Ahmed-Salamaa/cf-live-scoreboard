@@ -9,9 +9,11 @@ import {
   clearCookieHeader,
   clearLoginFailures,
   clientIp,
+  getAdminSession,
   hashPassword,
   isAdminConfigured,
   isAdminRequest,
+  maybeRefreshCookieHeader,
   readJsonBody,
   recordLoginFailure,
   sessionCookieHeader,
@@ -77,7 +79,14 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/admin/session') {
     const settings = await getSettings()
-    return sendJson(res, { authenticated: isAdminRequest(req, settings), configured: isAdminConfigured(settings) })
+    const session = getAdminSession(req, settings)
+    const refreshCookie = session ? maybeRefreshCookieHeader(session, req, settings) : null
+    return sendJson(
+      res,
+      { authenticated: Boolean(session), configured: isAdminConfigured(settings) },
+      200,
+      refreshCookie ? { 'Set-Cookie': refreshCookie } : {},
+    )
   }
 
   if (url.pathname === '/api/admin/login') {
@@ -112,8 +121,12 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/admin/settings') {
     const settings = await getSettings()
-    if (!isAdminRequest(req, settings)) return sendJson(res, { ok: false, unauthorized: true, error: 'Admin login required' }, 401)
-    if (req.method === 'GET') return sendJson(res, { ok: true, settings: toSafeAdminSettings(settings) })
+    const session = getAdminSession(req, settings)
+    if (!session) return sendJson(res, { ok: false, unauthorized: true, error: 'Admin login required' }, 401)
+    if (req.method === 'GET') {
+      const refreshCookie = maybeRefreshCookieHeader(session, req, settings)
+      return sendJson(res, { ok: true, settings: toSafeAdminSettings(settings) }, 200, refreshCookie ? { 'Set-Cookie': refreshCookie } : {})
+    }
     if (req.method !== 'PUT' && req.method !== 'POST') return sendJson(res, { ok: false, error: 'Method not allowed' }, 405)
     let body
     try {
@@ -137,8 +150,11 @@ const server = http.createServer(async (req, res) => {
     try {
       const updated = await updateSettings(patch)
       invalidateContestCache()
+      const nowSec = Math.floor(Date.now() / 1000)
+      const token = signSession(nowSec, updated, session.maxExp)
+      const maxAge = Math.max(1, Math.min(nowSec + 15 * 60, session.maxExp) - nowSec)
       return sendJson(res, { ok: true, settings: toSafeAdminSettings(updated) }, 200, {
-        'Set-Cookie': sessionCookieHeader(signSession(undefined, updated), req),
+        'Set-Cookie': sessionCookieHeader(token, req, maxAge),
       })
     } catch (e) {
       return sendJson(res, { ok: false, error: e?.message || 'Failed to update settings' }, e?.statusCode || 500)
@@ -149,8 +165,10 @@ const server = http.createServer(async (req, res) => {
     const settings = await getSettings()
     const wantsAdmin = url.searchParams.get('admin') === '1'
     if (wantsAdmin) {
-      if (!isAdminRequest(req, settings)) return sendJson(res, { ok: false, unauthorized: true, error: 'Admin login required' }, 401)
-      return sendJson(res, await getContest({ isAdmin: true, cacheDir: CACHE_DIR, settings }))
+      const session = getAdminSession(req, settings)
+      if (!session) return sendJson(res, { ok: false, unauthorized: true, error: 'Admin login required' }, 401)
+      const refreshCookie = maybeRefreshCookieHeader(session, req, settings)
+      return sendJson(res, await getContest({ isAdmin: true, cacheDir: CACHE_DIR, settings }), 200, refreshCookie ? { 'Set-Cookie': refreshCookie } : {})
     }
     return sendJson(res, await getContest({ isAdmin: false, cacheDir: CACHE_DIR, settings }))
   }
